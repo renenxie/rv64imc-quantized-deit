@@ -1,0 +1,4 @@
+RESULT kernel=qfc_b0 M=4 K=40 N=12 insts=18112 macs=1920 mac_per_inst_x1000=106 inst_per_out=377 status=PASS errors=0
+RESULT kernel=qfc_b0 M=3 K=67 N=9 insts=16061 macs=1809 mac_per_inst_x1000=112 inst_per_out=594 status=PASS errors=0
+RESULT kernel=qfc_b0 M=16 K=192 N=768 insts=19556686 macs=2359296 mac_per_inst_x1000=120 inst_per_out=1591 status=PASS errors=0
+RESULT kernel=qfc_b0 M=16 K=192 N=576 insts=14667566 macs=1769472 mac_per_inst_x1000=120 inst_per_out=1591 status=PASS errors=0

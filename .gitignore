@@ -1,0 +1,22 @@
+# 編譯產物
+/build/
+runtime/build/*
+!runtime/build/io/
+!runtime/build/io_multi/
+spike/build/
+*.elf
+*.o
+*.d
+__pycache__/
+.DS_Store
+
+# 大型或可重新產生的資料（取得方式見 README / docs/程式架構筆記.md）
+data/
+models/deit_tiny_fp32.tflite
+
+# 不公開：課程資料、討論紀錄、測試用小程式
+Course_Syllabus_2026.pdf
+rv64imc_quantized_nn_term_project.md
+docs/Discord_老師說明整理.txt
+hello
+hello.c

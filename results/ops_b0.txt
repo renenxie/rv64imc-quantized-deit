@@ -1,0 +1,7 @@
+RESULT op=gelu outputs=3072 insts=21517 inst_per_out_x1000=7004 status=PASS errors=0
+RESULT op=add outputs=3072 insts=342658 inst_per_out_x1000=111542 status=PASS errors=0
+RESULT op=softmax outputs=1576 insts=47312 inst_per_out_x1000=30020 status=PASS errors=0
+RESULT op=softmax outputs=256 insts=7817 inst_per_out_x1000=30535 status=PASS errors=0
+RESULT op=layernorm outputs=3072 insts=143641 inst_per_out_x1000=46758 status=PASS errors=0
+RESULT op=matmul outputs=3152 insts=1965509 inst_per_out_x1000=623575 macs=201728 mac_per_inst_x1000=102 status=PASS errors=0
+RESULT op=matmul outputs=1024 insts=1864487 inst_per_out_x1000=1820788 macs=201728 mac_per_inst_x1000=108 status=PASS errors=0

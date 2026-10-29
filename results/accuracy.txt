@@ -1,0 +1,4 @@
+model=deit_tiny_fp32.tflite input=float32 images=1000 top1=80.80% top5=95.10%
+model=deit_tiny_int8.tflite input=int8 images=1000 top1=77.60% top5=93.10%
+# 完全整數版（SQUEEZE→RESHAPE）
+model=deit_tiny_int8.tflite input=int8 images=1000 top1=75.40% top5=93.50%

@@ -1,0 +1,3 @@
+image=/sessions/rcw-016jsxxtnkxfrty4yzbsaxd8/mnt/期中project/scripts/../data/imagenette/eval/1/02368.jpg
+label=217
+golden_top1=217

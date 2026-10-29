@@ -9,21 +9,23 @@
 //  2. 暫存器分塊（register blocking）：一次算 2 個 token × 4 個輸出通道 = 8 個累加器，
 //     每載入 1 個輸入給 4 個通道用、每載入 1 個權重給 2 個 token 用 → load / MAC 從 2 降到 0.75
 //  3. 內層迴圈展開 4 次：指標遞增與迴圈判斷分攤到 4 個 k
+//  （2、3 的內積核心放在 gemm_b1.h，與 BATCH_MATMUL 共用）
 //
 // int32 累加：|x|,|w| ≤ 128，K ≤ 768 → |Σ| ≤ 128·128·768 ≈ 1.26e7，遠小於 2^31，不會溢位，
 // 所以改變加法順序不影響結果。requant 與 B0（已改成單次四捨五入的 per-channel 版本）完全相同。
 //
 // 只處理 DeiT 用到的情況（INT8 輸入 / 輸出、per-channel INT8 權重、INT32 bias、無 fused activation
 // 以外的上下限照常截斷）；其他情況交回 LiteRT Micro 原本的 kernel。
-#include <cstdint>
-
-#include "tensorflow/lite/micro/kernels/fully_connected.h"
-#include "tensorflow/lite/micro/kernels/kernel_util.h"
-#include "tensorflow/lite/micro/micro_log.h"
-
 // 關掉「暫存器配置前」的指令排程：它會把很多 load 提前，暫存器不夠而溢出到 stack，
 // 內層迴圈每圈多出約 20 條 ld/sd（實測 FC 3.95G → 3.25G 條指令）。只影響這個檔案。
 #pragma GCC optimize("no-schedule-insns")
+
+#include <cstdint>
+
+#include "kernels/gemm_b1.h"
+#include "tensorflow/lite/micro/kernels/fully_connected.h"
+#include "tensorflow/lite/micro/kernels/kernel_util.h"
+#include "tensorflow/lite/micro/micro_log.h"
 
 namespace {
 
@@ -119,93 +121,11 @@ TfLiteStatus FcB1Eval(TfLiteContext* context, TfLiteNode* node) {
   const int32_t act_min = data->base.output_activation_min;
   const int32_t act_max = data->base.output_activation_max;
 
-  int b = 0;
-  // 主體：2 個 token × 4 個輸出通道
-  for (; b + 1 < batches; b += 2) {
-    const int8_t* x0 = x + b * k_in;
-    const int8_t* x1 = x0 + k_in;
-    int8_t* y0 = y + b * n_out;
-    int8_t* y1 = y0 + n_out;
-    int n = 0;
-    for (; n + 3 < n_out; n += 4) {
-      const int8_t* w0 = w + n * k_in;
-      const int8_t* w1 = w0 + k_in;
-      const int8_t* w2 = w1 + k_in;
-      const int8_t* w3 = w2 + k_in;
-      int32_t a00 = 0, a01 = 0, a02 = 0, a03 = 0;
-      int32_t a10 = 0, a11 = 0, a12 = 0, a13 = 0;
-      // 用指標 + 固定位移存取（lb rd, o(ptr)），每 4 個 k 才遞增一次指標
-      const int8_t* p0 = x0;
-      const int8_t* p1 = x1;
-      const int8_t* q0 = w0;
-      const int8_t* q1 = w1;
-      const int8_t* q2 = w2;
-      const int8_t* q3 = w3;
-      const int8_t* const p_end4 = x0 + (k_in & ~3);
-#define FC_B1_STEP(o)                                                         \
-  {                                                                           \
-    const int32_t i0 = p0[o], i1 = p1[o];                                     \
-    const int32_t c0 = q0[o], c1 = q1[o], c2 = q2[o], c3 = q3[o];             \
-    a00 += i0 * c0; a01 += i0 * c1; a02 += i0 * c2; a03 += i0 * c3;           \
-    a10 += i1 * c0; a11 += i1 * c1; a12 += i1 * c2; a13 += i1 * c3;           \
-  }
-      while (p0 != p_end4) {
-        FC_B1_STEP(0) FC_B1_STEP(1) FC_B1_STEP(2) FC_B1_STEP(3)
-        p0 += 4; p1 += 4; q0 += 4; q1 += 4; q2 += 4; q3 += 4;
-      }
-      while (p0 != x0 + k_in) {  // K 不是 4 的倍數時的尾端
-        FC_B1_STEP(0)
-        ++p0; ++p1; ++q0; ++q1; ++q2; ++q3;
-      }
-#undef FC_B1_STEP
-      const int32_t acc0[4] = {a00, a01, a02, a03};
-      const int32_t acc1[4] = {a10, a11, a12, a13};
-      for (int j = 0; j < 4; ++j) {
-        const int c = n + j;
-        y0[c] = Requant(acc0[j] + bias_eff[c], mult[c], shift[c], out_off, act_min, act_max);
-        y1[c] = Requant(acc1[j] + bias_eff[c], mult[c], shift[c], out_off, act_min, act_max);
-      }
-    }
-    for (; n < n_out; ++n) {  // 剩下不足 4 個的輸出通道
-      const int8_t* wn = w + n * k_in;
-      int32_t a0 = 0, a1 = 0;
-      for (int k = 0; k < k_in; ++k) {
-        a0 += x0[k] * wn[k];
-        a1 += x1[k] * wn[k];
-      }
-      y0[n] = Requant(a0 + bias_eff[n], mult[n], shift[n], out_off, act_min, act_max);
-      y1[n] = Requant(a1 + bias_eff[n], mult[n], shift[n], out_off, act_min, act_max);
-    }
-  }
-  // 剩下的單一 token（例如最後分類層只有 1 個 token）：1 個 token × 4 個輸出通道
-  for (; b < batches; ++b) {
-    const int8_t* x0 = x + b * k_in;
-    int8_t* y0 = y + b * n_out;
-    int n = 0;
-    for (; n + 3 < n_out; n += 4) {
-      const int8_t* w0 = w + n * k_in;
-      const int8_t* w1 = w0 + k_in;
-      const int8_t* w2 = w1 + k_in;
-      const int8_t* w3 = w2 + k_in;
-      int32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0;
-#pragma GCC unroll 4
-      for (int k = 0; k < k_in; ++k) {
-        const int32_t i0 = x0[k];
-        a0 += i0 * w0[k]; a1 += i0 * w1[k]; a2 += i0 * w2[k]; a3 += i0 * w3[k];
-      }
-      const int32_t acc[4] = {a0, a1, a2, a3};
-      for (int j = 0; j < 4; ++j) {
-        const int c = n + j;
-        y0[c] = Requant(acc[j] + bias_eff[c], mult[c], shift[c], out_off, act_min, act_max);
-      }
-    }
-    for (; n < n_out; ++n) {
-      const int8_t* wn = w + n * k_in;
-      int32_t a0 = 0;
-      for (int k = 0; k < k_in; ++k) a0 += x0[k] * wn[k];
-      y0[n] = Requant(a0 + bias_eff[n], mult[n], shift[n], out_off, act_min, act_max);
-    }
-  }
+  // 內積核心（2 token × 4 輸出通道分塊）見 gemm_b1.h；這裡只負責每個輸出的 bias 與 requant
+  b1::GemmInt8(x, w, batches, n_out, k_in, [&](int i, int j, int32_t acc) {
+    y[i * n_out + j] =
+        Requant(acc + bias_eff[j], mult[j], shift[j], out_off, act_min, act_max);
+  });
   return kTfLiteOk;
 }
 

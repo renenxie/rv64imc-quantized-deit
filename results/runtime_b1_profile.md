@@ -1,4 +1,4 @@
-# DeiT-Tiny INT8 在 Spike（RV64IMC）上的動態指令數 — B1（軟體優化 kernel：FC、BMM、CONV、SOFTMAX、ADD/SUB/MUL/MEAN，-O2）
+# DeiT-Tiny INT8 在 Spike（RV64IMC）上的動態指令數 — b1（軟體優化 kernel，-O2）
 
 - 一次完整推論（Invoke）：**4,360,294,342** 條指令
 - 推論中的軟體浮點呼叫：0 次

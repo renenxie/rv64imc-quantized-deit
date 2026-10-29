@@ -122,6 +122,8 @@ def main():
     ap.add_argument("--macs", required=True)
     ap.add_argument("--profile", required=True)
     ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("--label", default="B0（LiteRT Micro reference kernel，RV64IMC，-O2）",
+                    help="報告標題中的版本說明")
     a = ap.parse_args()
 
     full, invoke_insts = read_hist(a.hist)
@@ -183,7 +185,7 @@ def main():
     store_bytes = sum(STORE_W[m] * n for m, n in store_w.items())
 
     L = []
-    L += ["# DeiT-Tiny INT8 workload 分析 — B0（LiteRT Micro reference kernel，RV64IMC，-O2）", "",
+    L += [f"# DeiT-Tiny INT8 workload 分析 — {a.label}", "",
           "資料來源：Spike PC 直方圖（`spike -g`），扣掉只做初始化的版本後，只留下推論（Invoke）的指令。", ""]
 
     L += ["## 1. 總覽", "",
@@ -307,38 +309,24 @@ def main():
     L.append("")
 
     # ------------------------------------------------ 8. 瓶頸
-    mac_loops = sum(h[3] for h in hot[:2])
-    fc = hot[0]
-    fc_load = fc[4]["load"]
-    fc_ovh = fc[4]["alu"] + fc[4]["branch"] - 1    # 扣掉真正的累加
+    # 第 8 節只整理「由本次數據算出的」重點，不寫固定的結論；解讀與架構建議請寫在報告裡
     def per_el(k):
         return agg[k][1] / agg[k][3] if k in agg and agg[k][3] else 0
-    elw = sum(agg[k][1] for k in agg if k in ("ADD", "SUB", "MUL", "MEAN", "RSQRT"))
-    fc_outer = agg["FULLY_CONNECTED"][1] - fc[3] if "FULLY_CONNECTED" in agg else 0
-    fc_out = agg["FULLY_CONNECTED"][3] if "FULLY_CONNECTED" in agg else 1
-    L += ["## 8. 前幾大架構瓶頸（依量測排序）", "",
-          f"1. **逐 byte 的純量乘加（scalar MAC）**：最熱的兩個迴圈（FC、BATCH_MATMUL）就佔推論的 "
-          f"{pct(mac_loops, total)}。FC 迴圈每個 MAC 要 {fc[1]} 條指令，其中只有 1 條乘法、1 條累加；"
-          f"整個模型平均每個 MAC {total / total_macs:.2f} 條指令（MAC/指令 = {total_macs / total:.3f}）。"
-          " → packed INT8 MAC 指令。",
-          f"2. **load 指令過多、每次只讀 1 byte**：load 佔 {pct(loads, total)}，每個 MAC 要 "
-          f"{loads / total_macs:.2f} 條 load，平均每次只讀 {load_bytes / loads:.2f} bytes"
-          f"（`lb` 佔 load 的 {pct(load_w['lb'] + load_w['lbu'], loads)}）。"
-          " → 一次載入 8 個 INT8（`ld`）搭配 packed MAC；進一步可考慮 post-increment load。",
-          f"3. **迴圈與位址計算開銷**：FC 迴圈每圈有 {fc_ovh} 條是指標遞增、加 zero-point、迴圈判斷，"
-          f"比乘加本身還多；BATCH_MATMUL 迴圈每圈還從 stack 重讀 2 次 zero-point（暫存器不足）。"
-          " → B1 軟體優化（zero-point 移出迴圈、展開），之後可考慮 hardware loop。",
-          f"4. **requant 與逐元素運算**：FC 每個輸出元素在乘加迴圈外還要約 {fc_outer / fc_out:.0f} 條指令"
-          f"（加 bias、requant、截斷、迴圈設定）；逐元素運算每個輸出元素 ADD {per_el('ADD'):.0f}、"
-          f"SUB {per_el('SUB'):.0f}、MUL {per_el('MUL'):.0f} 條，主要花在 requant；"
-          f"共用的 requant 函式 `MultiplyByQuantizedMultiplier` 每次 19 條。ADD/SUB/MUL/MEAN/RSQRT"
-          f"（LayerNorm 與 residual）合計 {pct(elw, ptotal)}。"
-          " → requant 指令（乘 multiplier、四捨五入、位移、加 zero-point、飽和一次完成）。",
-          f"5. **其他值得注意**：SOFTMAX {pct(agg.get('SOFTMAX', [0, 0])[1], ptotal)}"
-          f"（每個輸出 {per_el('SOFTMAX'):.0f} 條，主要是定點 exp）；MEAN 每個輸出 {per_el('MEAN'):,.0f} 條"
-          "（每個輸出是 192 個輸入的平均，通用 reduce 的索引計算很重）；CONV_2D 每個 MAC "
-          f"{agg['CONV_2D'][1] / max(agg['CONV_2D'][2], 1):.1f} 條（輸入只有 3 個通道，內層迴圈太短）。"
-          " → 多為 B1 可處理的軟體問題。", ""]
+    mac_loops = sum(h[3] for h in hot[:2])
+    L += ["## 8. 量測摘要（由本次數據自動整理）", "",
+          f"- 最熱的兩個迴圈（`{hot[0][0]}`、`{hot[1][0]}`）合計佔推論的 {pct(mac_loops, total)}"
+          if len(hot) >= 2 else "- （迴圈不足兩個）",
+          f"- 整個模型平均每個 MAC {total / total_macs:.2f} 條指令（MAC/指令 = {total_macs / total:.3f}）",
+          f"- load 佔 {pct(loads, total)}；每個 MAC {loads / total_macs:.2f} 條 load；"
+          f"平均每次 load {load_bytes / loads:.2f} bytes；`lb`/`lbu` 佔 load 的 "
+          f"{pct(load_w['lb'] + load_w['lbu'], loads)}",
+          f"- 乘法指令佔 {pct(mix['mul'], total)}；每個 MAC {mix['mul'] / total_macs:.2f} 條乘法",
+          "- 各運算每個 MAC 的指令數：" + "、".join(
+              f"{k} {agg[k][1] / agg[k][2]:.2f}" for k in agg if agg[k][2]),
+          "- 各運算每個輸出元素的指令數：" + "、".join(
+              f"{k} {per_el(k):.1f}" for k in ("ADD", "SUB", "MUL", "MEAN", "SOFTMAX", "GELU")
+              if k in agg),
+          ""]
 
     text = "\n".join(L) + "\n"
     with open(a.out + ".md", "w", encoding="utf-8") as fh:

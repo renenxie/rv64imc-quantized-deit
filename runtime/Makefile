@@ -7,6 +7,7 @@
 #   make profile    # 同上，另外列出每個運算的指令數
 #   make audit      # 測試：目標端照原本方式用浮點計算參數，逐筆與離線參數表比對
 #   make analysis   # workload 分析（PC 直方圖 → 指令組成、熱點、code size），約 8 分鐘
+#                   # 需要先 make profile（同一個 VARIANT）；輸出 results/{hot_loops,workload}_<VARIANT>.md
 #   make clean
 #
 # 浮點：RV64IMC 沒有浮點硬體。LiteRT Micro 原本在初始化（Prepare）時用浮點把 scale 換算成
@@ -167,15 +168,19 @@ $(BUILD)/deit$(ELF_SUFFIX)_noinvoke.elf: $(COMMON_OBJS) main.cc bsp/link_tflm.ld
 	$(CXX) $(COMMON_OBJS) $(OBJ)/main_noinvoke.o $(LDFLAGS) -o $@
 
 analysis: $(ELF) $(BUILD)/deit$(ELF_SUFFIX)_noinvoke.elf
-	$(SPIKE) -g --isa=$(SPIKE_ISA) $(ELF) > $(BUILD)/hist.txt 2>&1
-	$(SPIKE) -g --isa=$(SPIKE_ISA) $(BUILD)/deit$(ELF_SUFFIX)_noinvoke.elf > $(BUILD)/hist_noinvoke.txt 2>&1
-	riscv-none-elf-objdump -d -C $(ELF) > $(BUILD)/deit.dis
-	riscv-none-elf-size -A $(ELF) > $(BUILD)/size.txt
-	python3 ../scripts/hot_loops.py $(BUILD)/hist.txt $(BUILD)/deit.dis -o ../results/hot_loops_b0.md
-	python3 ../scripts/check_nofp.py $(BUILD)/hist.txt $(BUILD)/deit.dis
-	python3 ../scripts/workload_analysis.py --hist $(BUILD)/hist.txt --hist-base $(BUILD)/hist_noinvoke.txt \
-	    --dis $(BUILD)/deit.dis --size $(BUILD)/size.txt --macs ../results/model_macs.txt \
-	    --profile ../results/runtime_b0_profile_ops.csv -o ../results/workload_b0
+	$(SPIKE) -g --isa=$(SPIKE_ISA) $(ELF) > $(BUILD)/hist$(ELF_SUFFIX).txt 2>&1
+	@# 跳過推論的版本沒有輸出可比對，必然回報 FAIL，所以忽略它的結束碼（行首的 -）
+	-$(SPIKE) -g --isa=$(SPIKE_ISA) $(BUILD)/deit$(ELF_SUFFIX)_noinvoke.elf > $(BUILD)/hist$(ELF_SUFFIX)_noinvoke.txt 2>&1
+	riscv-none-elf-objdump -d -C $(ELF) > $(BUILD)/deit$(ELF_SUFFIX).dis
+	riscv-none-elf-size -A $(ELF) > $(BUILD)/size$(ELF_SUFFIX).txt
+	python3 ../scripts/hot_loops.py $(BUILD)/hist$(ELF_SUFFIX).txt $(BUILD)/deit$(ELF_SUFFIX).dis \
+	    -o ../results/hot_loops_$(VARIANT).md
+	python3 ../scripts/check_nofp.py $(BUILD)/hist$(ELF_SUFFIX).txt $(BUILD)/deit$(ELF_SUFFIX).dis
+	python3 ../scripts/workload_analysis.py --hist $(BUILD)/hist$(ELF_SUFFIX).txt \
+	    --hist-base $(BUILD)/hist$(ELF_SUFFIX)_noinvoke.txt --dis $(BUILD)/deit$(ELF_SUFFIX).dis \
+	    --size $(BUILD)/size$(ELF_SUFFIX).txt --macs ../results/model_macs.txt \
+	    --profile ../results/runtime_$(VARIANT)_profile_ops.csv -o ../results/workload_$(VARIANT) \
+	    --label "$(VARIANT)（$(if $(VAR_TAG),軟體優化 kernel,LiteRT Micro 原始 reference kernel)，RV64IMC，-O2）"
 
 # 產生輸入圖片（INT8）與 Python LiteRT 參考答案；需要 ai-edge-litert、pillow
 io:

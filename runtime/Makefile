@@ -13,6 +13,10 @@
 # 整數參數；這裡改成在電腦上離線算好（tools/gen_offline_params.cc，記錄模式），
 # 目標端直接讀表（重播模式），因此整個程式執行期間沒有任何浮點運算。
 #   OFFLINE=2  重播（預設）    OFFLINE=3  稽核（測試用）    OFFLINE=0  原本做法（對照用）
+#
+# 版本：VARIANT=b0（預設，LiteRT Micro 原本的 reference kernel）
+#       VARIANT=b1（軟體優化的 kernel：kernels/*_b1.cc），執行檔 build/deit_b1.elf
+#   make VARIANT=b1 run / profile / analysis
 
 CC      := riscv-none-elf-gcc
 CXX     := riscv-none-elf-g++
@@ -24,19 +28,29 @@ SPIKE_ISA := rv64imc_zicsr_zicntr
 
 OPT     ?= -O2
 OFFLINE ?= 2
+VARIANT ?= b0
 BUILD   := build
 MODEL   := ../models/deit_tiny_int8.tflite
 IO_DIR  := $(BUILD)/io
 PARAMS  := $(BUILD)/offline_params.bin
 
-# 不同 OFFLINE 模式的目的檔分開放，避免混用
-OBJ     := $(BUILD)/obj-p$(OFFLINE)
-ifeq ($(OFFLINE),2)
-  ELF_SUFFIX :=
-else ifeq ($(OFFLINE),3)
-  ELF_SUFFIX := _audit
+# 不同 OFFLINE 模式、不同版本的目的檔分開放，避免混用
+ifeq ($(VARIANT),b0)
+  VAR_DEFS :=
+  VAR_TAG  :=
+else ifeq ($(VARIANT),b1)
+  VAR_DEFS := -DDEIT_B1
+  VAR_TAG  := _b1
 else
-  ELF_SUFFIX := _float
+  $(error VARIANT 只能是 b0 或 b1)
+endif
+OBJ     := $(BUILD)/obj-p$(OFFLINE)$(VAR_TAG)
+ifeq ($(OFFLINE),2)
+  ELF_SUFFIX := $(VAR_TAG)
+else ifeq ($(OFFLINE),3)
+  ELF_SUFFIX := $(VAR_TAG)_audit
+else
+  ELF_SUFFIX := $(VAR_TAG)_float
 endif
 ELF     := $(BUILD)/deit$(ELF_SUFFIX).elf
 
@@ -45,7 +59,7 @@ INCLUDES := -I. -I$(TFLM) -I$(TFLM)/third_party/flatbuffers/include -I$(TFLM)/th
             -I$(TFLM)/third_party/ruy -I$(TFLM)/third_party/kissfft
 DEFS    := -DTF_LITE_STATIC_MEMORY -DTF_LITE_DISABLE_X86_NEON -DNDEBUG
 COMMON  := -march=$(ARCH) -mabi=$(ABI) -mcmodel=medany $(OPT) -ffunction-sections -fdata-sections
-CXXFLAGS := $(COMMON) $(DEFS) -DTFLM_OFFLINE_PARAMS=$(OFFLINE) -std=c++17 -fno-exceptions -fno-rtti \
+CXXFLAGS := $(COMMON) $(DEFS) $(VAR_DEFS) -DTFLM_OFFLINE_PARAMS=$(OFFLINE) -std=c++17 -fno-exceptions -fno-rtti \
             -fno-threadsafe-statics -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -Wno-unused-parameter -Wno-unused-function -MMD -MP $(INCLUDES)
 CFLAGS  := $(COMMON) -MMD -MP $(INCLUDES)
@@ -70,9 +84,10 @@ LDFLAGS := -march=$(ARCH) -mabi=$(ABI) -nostartfiles -T bsp/link_tflm.ld -Wl,--g
 TFLM_ALL  := $(shell find $(TFLM)/tensorflow -name '*.cc')
 TFLM_SRCS := $(filter-out %/micro_time.cc,$(TFLM_ALL))
 APP_SRCS  := main.cc kernels/gelu_int8.cc bsp/platform.cc
+B1_SRCS   := $(wildcard kernels/*_b1.cc)
 C_SRCS    := bsp/newlib_stubs.c bsp/fp_counter.c
 
-COMMON_OBJS := $(patsubst %.cc,$(OBJ)/%.o,$(TFLM_SRCS) kernels/gelu_int8.cc bsp/platform.cc) \
+COMMON_OBJS := $(patsubst %.cc,$(OBJ)/%.o,$(TFLM_SRCS) kernels/gelu_int8.cc $(B1_SRCS) bsp/platform.cc) \
                $(patsubst %.c,$(OBJ)/%.o,$(C_SRCS)) $(OBJ)/crt0.o $(BUILD)/data.o
 OBJS := $(COMMON_OBJS) $(OBJ)/main.o
 
@@ -133,7 +148,8 @@ $(BUILD)/deit$(ELF_SUFFIX)_profile.elf: $(COMMON_OBJS) main.cc bsp/link_tflm.ld
 
 profile: $(BUILD)/deit$(ELF_SUFFIX)_profile.elf
 	$(SPIKE) --isa=$(SPIKE_ISA) $< > $(BUILD)/profile_rv.txt; tail -1 $(BUILD)/profile_rv.txt
-	python3 ../scripts/profile_report.py $(BUILD)/profile_rv.txt -o ../results/runtime_b0_profile
+	python3 ../scripts/profile_report.py $(BUILD)/profile_rv.txt -o ../results/runtime_$(VARIANT)_profile \
+	    --label "$(VARIANT)（$(if $(VAR_TAG),軟體優化 kernel,LiteRT Micro 原始 reference kernel)，-O2）"
 
 # 除錯用：保留所有中間 tensor，印出每個運算輸出的檢查碼（make dump > build/dump_rv.txt）
 $(BUILD)/deit$(ELF_SUFFIX)_dump.elf: $(COMMON_OBJS) main.cc bsp/link_tflm.ld

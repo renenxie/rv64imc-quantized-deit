@@ -9,10 +9,18 @@
 TfLiteStatus ParseGeluInt8(const tflite::Operator*, tflite::micro::BuiltinDataAllocator*, void**);
 TFLMRegistration Register_GELU_INT8();
 
+// B1（軟體優化）版本的 kernel：編譯時加 -DDEIT_B1（make VARIANT=b1）才會使用，
+// 否則用 LiteRT Micro 原本的 reference kernel（B0）。
+TFLMRegistration Register_FULLY_CONNECTED_B1();
+
 using DeitOpResolver = tflite::MicroMutableOpResolver<20>;
 
 inline void RegisterDeitOps(DeitOpResolver& r) {
+#ifdef DEIT_B1
+  r.AddFullyConnected(Register_FULLY_CONNECTED_B1());
+#else
   r.AddFullyConnected();
+#endif
   r.AddBatchMatMul();
   r.AddSoftmax();
   r.AddMean();
